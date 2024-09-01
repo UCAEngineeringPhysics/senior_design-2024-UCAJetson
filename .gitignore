@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# workspace files
+*.code-workspace
+
 # Distribution / packaging
 .Python
 build/
