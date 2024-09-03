@@ -34,3 +34,12 @@ pip install -r requirements.txt --break-system-packages
 ## Demo Videos
 - [Initial BearCart](https://youtube.com/shorts/Kcm6qQqev3s)
 - [Another Autopilot](https://youtu.be/8GX6HnfgrJQ)
+
+## Useful resources
+
+[Nvidia developer isaac ros](https://developer.nvidia.com/isaac/ros)
+
+[Nvidia ISAAC ROS GitHub Repos](https://github.com/NVIDIA-ISAAC-ROS)
+[Nvidia ISAAC ROS Documentation](https://nvidia-isaac-ros.github.io/)
+
+[Examples (JetsonHacksNano)](https://github.com/JetsonHacksNano)
