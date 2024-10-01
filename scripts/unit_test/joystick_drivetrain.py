@@ -25,7 +25,7 @@ THROTTLE_REV_RANGE = params['throttle_rev_range']
 THROTTLE_LIMIT = params['throttle_limit']
 STOP_BUTTON = params['stop_btn_x'] # 'X' button emergency stop
 # Init serial port
-ser_pico = serial.Serial(port='/dev/ttyACM0', baudrate=115200)
+ser_pico = serial.Serial(port='/dev/ttyACM1', baudrate=115200)
 print(f"Pico is connected to port: {ser_pico.name}")
 # Init controller
 pygame.display.init()
