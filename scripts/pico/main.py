@@ -25,7 +25,6 @@ try:
             buffer = msg.readline().rstrip().split(',')
             if len(buffer) == 2:
                 ns_st, ns_th = int(buffer[0]), int(buffer[1])
-                print(f"steering: {ns_st}\nthrottle: {ns_th}")
                 steering.duty_ns(ns_st)
                 throttle.duty_ns(ns_th)
 except:
