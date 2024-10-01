@@ -49,7 +49,7 @@ try:
                     ser_pico.close()
                     sys.exit()
         # Calaculate steering and throttle value
-        act_st = ax_val_st
+        act_st = -ax_val_st
         act_th = -ax_val_th  # throttle action: -1: max forward, 1: max backward
         # Encode steering value to dutycycle in nanosecond
         duty_st = STEERING_CENTER - STEERING_RANGE + int(STEERING_RANGE * (act_st + 1))
@@ -60,6 +60,8 @@ try:
             duty_th = THROTTLE_STALL + int(THROTTLE_REV_RANGE * max(act_th, -THROTTLE_LIMIT))
         else:
             duty_th = THROTTLE_STALL 
+        print(f"Duty Throttle: {duty_th}")
+        print(f"Duty Steering: {duty_st}")
         msg = (str(duty_st) + "," + str(duty_th) + "\n").encode('utf-8')
         # f"{act_st,act_th}\n".encode('utf-8')
         ser_pico.write(msg)
