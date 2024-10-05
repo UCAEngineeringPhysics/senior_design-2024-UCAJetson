@@ -4,9 +4,9 @@
 NETWORK_SSID=$(nmcli -t -f active,ssid dev wifi | grep '^yes' | cut -d':' -f2)
 
 # Replace these with your desired IP settings
-DESIRED_IP="192.168.0.111/24" # Example: 192.168.0.111/24
+DESIRED_IP="192.168.0.112/24" # Example: 192.168.0.111/24
 GATEWAY_IP="192.168.0.1" # Example: 192.168.0.1
-DNS_SERVER="8.8.8.8"               # Or your preferred DNS server
+DNS_SERVER="8.8.8.8" # Or your preferred DNS server
 
 if [ -z "$NETWORK_SSID" ]; then
     echo "No active Wi-Fi connection found."
