@@ -4,6 +4,7 @@ nav:
   - Home: index.md
   - Getting Started: getting_started.md
   - Bill of Materials: BOM.md
+  - Resources: Resources.md
   # - API Reference: api.md
 
 theme:
