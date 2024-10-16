@@ -9,6 +9,7 @@ from machine import Pin, PWM
 
 # SETUP
 steering = PWM(Pin(0))
+
 steering.freq(50)
 throttle = PWM(Pin(15))
 throttle.freq(50)
