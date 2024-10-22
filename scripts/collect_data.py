@@ -1,155 +1,238 @@
-import sys
 import os
+import sys
 import json
+import csv
 from time import time
 from datetime import datetime
-import csv
-import serial
+from hardware import setup_camera, setup_serial, setup_joystick, setup_led, encode_steering, encode_throttle
 import pygame
 import cv2 as cv
-from picamera2 import Picamera2
-from gpiozero import LED
 
 
 # SETUP
 # Load configs
 params_file_path = os.path.join(sys.path[0], 'configs.json')
-params_file = open(params_file_path)
-params = json.load(params_file)
+with open(params_file_path) as params_file:
+    params = json.load(params_file)
+
 # Constants
 STEERING_AXIS = params['steering_joy_axis']
-STEERING_CENTER = params['steering_center']
-STEERING_RANGE = params['steering_range']
 THROTTLE_AXIS = params['throttle_joy_axis']
-THROTTLE_STALL = params['throttle_stall']
-THROTTLE_FWD_RANGE = params['throttle_fwd_range']
-THROTTLE_REV_RANGE = params['throttle_rev_range']
-THROTTLE_LIMIT = params['throttle_limit']
 RECORD_BUTTON = params['record_btn']
 STOP_BUTTON = params['stop_btn']
-# Init LED
-headlight = LED(params['led_pin'])
-headlight.off()
-# Init serial port
-ser_pico = serial.Serial(port='/dev/ttyACM0', baudrate=115200)
-print(f"Pico is connected to port: {ser_pico.name}")
-# Init controller
-pygame.display.init()
-pygame.joystick.init()
-js = pygame.joystick.Joystick(0)
-# Create data directory
-image_dir = os.path.join(
-    os.path.dirname(sys.path[0]),
-    'data', datetime.now().strftime("%Y-%m-%d-%H-%M"),
-    'images/'
-)
-if not os.path.exists(image_dir):
-    try:
-        os.makedirs(image_dir)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
-label_path = os.path.join(os.path.dirname(os.path.dirname(image_dir)), 'labels.csv')
-# Init camera
-cv.startWindowThread()
-cam = Picamera2()
-cam.configure(
-    cam.create_preview_configuration(
-        main={"format": 'RGB888', "size": (120, 160)},
-        controls={"FrameDurationLimits": (50000, 50000)},  # 20 FPS
-    )
-)
-cam.start()
-for i in reversed(range(60)):
-    frame = cam.capture_array()
-    # cv.imshow("Camera", frame)
-    # cv.waitKey(1)
-    if frame is None:
-        print("No frame received. TERMINATE!")
-        sys.exit()
-    if not i % 20:
-        print(i/20)  # count down 3, 2, 1 sec
-# Init timer for FPS computing
-start_stamp = time()
-frame_counts = 0
-ave_frame_rate = 0.
-# Init variables
-ax_val_st = 0. # center steering
-ax_val_th = 0. # shut throttle
-is_recording = False
 
-# LOOP
+# Initialize hardware
+headlight = setup_led(params['led_pin'])
+ser_pico = setup_serial(port='/dev/ttyACM0', baudrate=115200)
+cam = setup_camera((120, 160), frame_rate=20)
+js = setup_joystick()
+
+# Create data directories
+data_dir = os.path.join('data', datetime.now().strftime("%Y-%m-%d-%H-%M"))
+image_dir = os.path.join(data_dir, 'images/')
+label_path = os.path.join(data_dir, 'labels.csv')
+os.makedirs(image_dir, exist_ok=True)
+
+# Initialize variables
+is_recording = False
+frame_counts = 0
+start_time = time()
+
+# MAIN LOOP
 try:
     while True:
-        frame = cam.capture_array() # read image
+        ret, frame = cam.read()
         if frame is None:
             print("No frame received. TERMINATE!")
-            headlight.close()
-            cv.destroyAllWindows()
-            pygame.quit()
-            ser_pico.close()
-            sys.exit()
-        for e in pygame.event.get(): # read controller input
+            break
+
+        # Controller input
+        for e in pygame.event.get():
             if e.type == pygame.JOYAXISMOTION:
-                ax_val_st = round((js.get_axis(STEERING_AXIS)), 2)  # keep 2 decimals
-                ax_val_th = round((js.get_axis(THROTTLE_AXIS)), 2)  # keep 2 decimals
+                ax_val_st = round(js.get_axis(STEERING_AXIS), 2)
+                ax_val_th = round(js.get_axis(THROTTLE_AXIS), 2)
             elif e.type == pygame.JOYBUTTONDOWN:
                 if js.get_button(RECORD_BUTTON):
                     is_recording = not is_recording
-                    print(f"Recording: {is_recording}")
                     headlight.toggle()
-                elif js.get_button(STOP_BUTTON): # emergency stop
+                elif js.get_button(STOP_BUTTON):
                     print("E-STOP PRESSED. TERMINATE!")
-                    headlight.off()
-                    headlight.close()
-                    cv.destroyAllWindows()
-                    pygame.quit()
-                    ser_pico.close()
-                    sys.exit()
-        # Calaculate steering and throttle value
-        act_st = ax_val_st  # steer action: -1: left, 1: right
-        act_th = -ax_val_th  # throttle action: -1: max forward, 1: max backward
-        # Encode steering value to dutycycle in nanosecond
-        duty_st = STEERING_CENTER - STEERING_RANGE + int(STEERING_RANGE * (act_st + 1))
-        # Encode throttle value to dutycycle in nanosecond
-        if act_th > 0:
-            duty_th = THROTTLE_STALL + int(THROTTLE_FWD_RANGE * min(act_th, THROTTLE_LIMIT))
-        elif act_th < 0:
-            duty_th = THROTTLE_STALL + int(THROTTLE_REV_RANGE * max(act_th, -THROTTLE_LIMIT))
-        else:
-            duty_th = THROTTLE_STALL 
-        msg = (str(duty_st) + "," + str(duty_th) + "\n").encode('utf-8')
-        # Transmit control signals
-        ser_pico.write(msg)
+                    break
+
+        # Encode and transmit control signals
+        duty_st = int(encode_steering(ax_val_st, params))
+        duty_th = int(encode_throttle(ax_val_th, params))
+        ser_pico.write(f"{duty_st},{duty_th}\n".encode('utf-8'))
+
         # Log data
-        action = [act_st, act_th]
-        # print(f"action: {action}")
         if is_recording:
-            # img = cv.resize(frame, (120, 160))
-            cv.imwrite(image_dir + str(frame_counts) + '.jpg', frame)
-            label = [str(frame_counts) + '.jpg'] + action
+            cv.imwrite(os.path.join(image_dir, f"{frame_counts}.jpg"), frame)
             with open(label_path, 'a+', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(label)
-        frame_counts += 1
-        # Log frame rate
-        since_start = time() - start_stamp
-        frame_rate = frame_counts / since_start
-        print(f"frame rate: {frame_rate}")
-        # Press "q" to quit
-        if cv.waitKey(1)==ord('q'):
-            headlight.off()
-            headlight.close()
-            cv.destroyAllWindows()
-            pygame.quit()
-            ser_pico.close()
-            sys.exit()
+                writer.writerow([f"{frame_counts}.jpg", ax_val_st, ax_val_th])
 
-# Take care terminate signal (Ctrl-c)
+        frame_counts += 1
+
 except KeyboardInterrupt:
-    headlight.off()
-    headlight.close()
-    cv.destroyAllWindows()
+    print("Terminated by user.")
+finally:
+    cam.stop()
     pygame.quit()
     ser_pico.close()
-    sys.exit()
+    headlight.off()
+    cv.destroyAllWindows()
+    
+"""
+# ROS2 RealSense and RP LiDAR Integration 
+import os
+import sys
+import json
+import csv
+from time import time
+from datetime import datetime
+from hardware import setup_serial, setup_joystick, setup_led, encode_steering, encode_throttle
+import pygame
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, LaserScan
+from cv_bridge import CvBridge
+import cv2 as cv
+import numpy as np
+
+# Load configs
+params_file_path = os.path.join(sys.path[0], 'configs.json')
+with open(params_file_path) as params_file:
+    params = json.load(params_file)
+
+# Constants
+STEERING_AXIS = params['steering_joy_axis']
+THROTTLE_AXIS = params['throttle_joy_axis']
+RECORD_BUTTON = params['record_btn']
+STOP_BUTTON = params['stop_btn']
+
+# Initialize hardware
+headlight = setup_led(params['led_pin'])
+ser_pico = setup_serial(port='/dev/ttyACM0', baudrate=115200)
+js = setup_joystick()
+
+# Create data directories
+data_dir = os.path.join('data', datetime.now().strftime("%Y-%m-%d-%H-%M"))
+image_dir = os.path.join(data_dir, 'images/')
+label_path = os.path.join(data_dir, 'labels.csv')
+os.makedirs(image_dir, exist_ok=True)
+
+# Initialize variables
+is_recording = False
+frame_counts = 0
+
+# ROS2 Node for RealSense and LiDAR
+class RealSenseLidarSubscriber(Node):
+    def __init__(self):
+        super().__init__('realsense_lidar_subscriber')
+        self.bridge = CvBridge()
+
+        # Subscribe to color and depth topics
+        self.color_sub = self.create_subscription(
+            Image,
+            '/camera/color/image_raw',
+            self.color_callback,
+            10)
+
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/camera/depth/image_rect_raw',
+            self.depth_callback,
+            10)
+
+        # Subscribe to LiDAR topic
+        self.lidar_sub = self.create_subscription(
+            LaserScan,
+            '/scan',  # Topic for RP LiDAR (can vary depending on setup)
+            self.lidar_callback,
+            10)
+
+        # Initialize frames and LiDAR data
+        self.color_frame = None
+        self.depth_frame = None
+        self.lidar_data = None
+
+    def color_callback(self, msg):
+        # Convert ROS Image message to OpenCV format
+        self.color_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+
+    def depth_callback(self, msg):
+        # Convert ROS Image message to OpenCV format
+        self.depth_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+
+    def lidar_callback(self, msg):
+        # Store LiDAR data for later use (ranges is an array of distances)
+        self.lidar_data = msg.ranges
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    # Initialize ROS2 RealSense + LiDAR node
+    realsense_lidar_subscriber = RealSenseLidarSubscriber()
+
+    # Initialize Pygame for joystick handling
+    pygame.init()
+
+    global is_recording
+    global frame_counts
+
+    try:
+        while rclpy.ok():
+            # Keep processing ROS2 topics (color, depth, LiDAR)
+            rclpy.spin_once(realsense_lidar_subscriber, timeout_sec=0.01)
+
+            # Get color, depth, and LiDAR data from RealSense and LiDAR
+            color_image = realsense_lidar_subscriber.color_frame
+            depth_image = realsense_lidar_subscriber.depth_frame
+            lidar_data = realsense_lidar_subscriber.lidar_data
+
+            # Controller input handling
+            for e in pygame.event.get():
+                if e.type == pygame.JOYAXISMOTION:
+                    ax_val_st = round(js.get_axis(STEERING_AXIS), 2)
+                    ax_val_th = round(js.get_axis(THROTTLE_AXIS), 2)
+                elif e.type == pygame.JOYBUTTONDOWN:
+                    if js.get_button(RECORD_BUTTON):
+                        is_recording = not is_recording
+                        headlight.toggle()
+                    elif js.get_button(STOP_BUTTON):
+                        print("E-STOP PRESSED. TERMINATE!")
+                        break
+
+            # Encode and transmit control signals
+            duty_st = int(encode_steering(ax_val_st, params))
+            duty_th = int(encode_throttle(ax_val_th, params))
+            ser_pico.write(f"{duty_st},{duty_th}\n".encode('utf-8'))
+
+            # Save color, depth, LiDAR, and joystick data if recording
+            if is_recording and color_image is not None and depth_image is not None and lidar_data is not None:
+                # Save images
+                cv.imwrite(os.path.join(image_dir, f"{frame_counts}_color.jpg"), color_image)
+                cv.imwrite(os.path.join(image_dir, f"{frame_counts}_depth.png"), depth_image)
+
+                # Log joystick and LiDAR data
+                with open(label_path, 'a+', newline='') as f:
+                    writer = csv.writer(f)
+                    lidar_summary = f"{min(lidar_data):.2f}-{max(lidar_data):.2f}"  # Min and max range as example
+                    writer.writerow([f"{frame_counts}_color.jpg", f"{frame_counts}_depth.png", lidar_summary, ax_val_st, ax_val_th])
+
+                frame_counts += 1
+
+    except KeyboardInterrupt:
+        print("Terminated by user.")
+    finally:
+        # Cleanup
+        rclpy.shutdown()
+        pygame.quit()
+        ser_pico.close()
+        headlight.off()
+        cv.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()
+
+    """
